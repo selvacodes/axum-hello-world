@@ -1,0 +1,87 @@
+use dotenv::dotenv;
+use serde::Deserialize;
+use snafu::prelude::*;
+use std::{
+    future::{self, Future},
+    path::PathBuf,
+};
+
+fn default_port() -> u16 {
+    3000
+}
+
+#[derive(Deserialize)]
+pub struct EnvConfig {
+    #[serde(default = "default_port")]
+    port: u16,
+}
+
+impl EnvConfig {
+    pub fn get_port(&self) -> u16 {
+        self.port
+    }
+}
+
+struct LoadEnvg<T> {
+    env: T,
+}
+
+#[derive(Debug, Snafu)]
+pub enum EnvMishap {
+    #[snafu(display("Error when loading env from file {:#?}", error))]
+    FileToEnvError { error: dotenv::Error },
+    #[snafu(display("error: {:#?}", error))]
+    EnvLoadError { error: envy::Error },
+}
+
+pub struct LoadEnv {}
+
+pub trait SyncEnvLoad {
+    fn load_to_env_from_file() -> Result<PathBuf, EnvMishap>;
+    fn load_env() -> Result<EnvConfig, EnvMishap>;
+}
+
+pub trait AsyncEnvLoad {
+    type LoadFromFile: Future<Output = Result<PathBuf, EnvMishap>>;
+    type LoadToEnv: Future<Output = Result<EnvConfig, EnvMishap>>;
+    fn load_to_env_from_file() -> Self::LoadFromFile;
+    fn load_env() -> Self::LoadToEnv;
+}
+
+impl SyncEnvLoad for LoadEnv {
+    fn load_to_env_from_file() -> Result<PathBuf, EnvMishap> {
+        let update_env_from_file = dotenv().map_err(|err| EnvMishap::FileToEnvError { error: err });
+        // .map_err(|e| eprint!("error while loading from dotenv {}", e))
+
+        update_env_from_file
+    }
+
+    fn load_env() -> Result<EnvConfig, EnvMishap> {
+        let env = dotenv::dotenv().ok();
+        envy::from_env::<EnvConfig>().map_err(|err| EnvMishap::EnvLoadError { error: err })
+    }
+}
+
+impl AsyncEnvLoad for LoadEnv {
+    type LoadFromFile = future::Ready<Result<PathBuf, EnvMishap>>;
+    type LoadToEnv = future::Ready<Result<EnvConfig, EnvMishap>>;
+
+    fn load_to_env_from_file() -> Self::LoadFromFile {
+        let update_env_from_file = dotenv()
+            // .map_err(|e| eprint!("error while loading from dotenv {}", e))
+            .map_err(|err| EnvMishap::FileToEnvError { error: err });
+
+        future::ready(update_env_from_file)
+    }
+
+    fn load_env() -> Self::LoadToEnv {
+        let env = dotenv::dotenv()
+            .map_err(|err| EnvMishap::FileToEnvError { error: err })
+            .and_then(|_y| {
+                envy::from_env::<EnvConfig>().map_err(|err| EnvMishap::EnvLoadError { error: err })
+            });
+
+        // let x = envy::from_env::<EnvConfig>().map_err(|err| EnvMishap::EnvLoadError { error: err });
+        future::ready(env)
+    }
+}
